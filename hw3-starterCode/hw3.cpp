@@ -165,7 +165,7 @@ double ambient_light[3];
 int num_triangles = 0;
 int num_spheres = 0;
 int num_lights = 0;
-
+bool isRightPixel = false;
 void plot_pixel_display(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel_jpeg(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel(int x,int y,unsigned char r,unsigned char g,unsigned char b);
@@ -201,7 +201,7 @@ Vec triangleNormal(Triangle t) {
 enum Plane {XY, YZ, ZX};
 enum Hit {NONE, SPHERE, TRIANGLE};
 
-void barycentricCoord(const Vec p, Triangle t, double &alpha, double &beta, double &gamma) {
+void barycentricCoord(const Vec& p, const Triangle t, double *alpha, double *beta, double *gamma) {
   Vec triangleN = triangleNormal(t);
   Vec NYZ,NZX,NXY;
   NYZ.x = 1.0; NYZ.y=0.0; NYZ.z =0.0;
@@ -265,9 +265,9 @@ void barycentricCoord(const Vec p, Triangle t, double &alpha, double &beta, doub
   double areaCC1C2 = (0.5 * ((bx - px)*(cy-py) - (cx-px)*(by-py)));
   double areaC0CC2 = (0.5 * ((px - ax)*(cy-ay) - (cx-ax)*(py-ay)));
   double areaC0C1C = (0.5 * ((bx - ax)*(py-ay) - (px-ax)*(by-ay)));
-  alpha = areaCC1C2 / areaAllV;
-  beta = areaC0CC2 / areaAllV;
-  gamma = areaC0C1C / areaAllV;
+  *alpha = areaCC1C2 / areaAllV;
+  *beta = areaC0CC2 / areaAllV;
+  *gamma = areaC0C1C / areaAllV;
 }
 
 
@@ -318,10 +318,10 @@ bool sphereIntersection(Vec v, double& minT, int& minIdx) {
 
 }
 
-bool triangleIntersection(Vec v, double &min_t, int &minIdx, Hit &hitSphere) {
+bool triangleIntersection( Vec v, double &min_t, int &minIdx, Hit &hitSphere, int ind) {
   bool found = false;
-  // cout << "MIN: " << min_t << endl;
   for(int i = 0; i < num_triangles; i++) {
+    if(isRightPixel) cout << "CHECK 3: " << hitSphere << endl;
     Triangle t = triangles[i];
     Vec planeNormal = triangleNormal(t);
     double a,b,c, d, denom;
@@ -335,13 +335,14 @@ bool triangleIntersection(Vec v, double &min_t, int &minIdx, Hit &hitSphere) {
     if(denom == 0) continue;
 
     double t_value = -1 * (a+b+c+d)/denom;
-    if(t_value <= 1e-8) continue;
+    if(t_value <= 0) continue;
     
     //check if i have to multiply t
     if(t_value < min_t) {
-      v = v.mult(t_value);
+      // Vec v2(v.x * t_value,v.y * t_value,v.z * t_value);
+      Vec v1 = v.mult(t_value);
       double alpha, beta, gamma;
-      barycentricCoord(v, t, alpha,beta,gamma);
+      barycentricCoord(v1, t, &alpha,&beta,&gamma);
       if(alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) continue;
       found = true;
       min_t = t_value;
@@ -353,22 +354,56 @@ bool triangleIntersection(Vec v, double &min_t, int &minIdx, Hit &hitSphere) {
   return found;
 }
 
-bool checkIntersection(Vec v, double &min_t, int &minIdx, Hit &hitSphere) {
+bool triangleIntersection2(const Ray v, int i, double& tGot) {
+  bool found = false;
+  // for(int i = 0; i < num_triangles; i++) {
+    // if(isRightPixel) cout << "CHECK 3: " << hitSphere << endl;
+    Triangle t = triangles[i];
+    Vec planeNormal = triangleNormal(t);
+    double a,b,c, d, denom;
+    a = planeNormal.x;
+    b = planeNormal.y;
+    c = planeNormal.z;
+
+    d = -1.0 * (a*t.v[0].position[0]+b*t.v[0].position[1]+c*t.v[0].position[2]);
+    denom = ((a*v.direction.x) +(b*v.direction.y)+(c*v.direction.z));
+
+    if(denom == 0) return false;
+
+    double t_value = -1 * (a*v.origin.x+b*v.origin.y+c*v.origin.z+d)/denom;
+    if(t_value <= 0) return false;
+    
+    //check if i have to multiply t
+   
+      Vec v2(v.direction.x * t_value,v.direction.y * t_value,v.direction.z * t_value);
+      v2 = v2.add(v.origin);
+      double alpha, beta, gamma;
+      barycentricCoord(v2, t, &alpha,&beta,&gamma);
+      if(alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) return false;
+      found = true;
+      tGot = t_value;
+    
+  // }
+  return found;
+}
+
+bool checkIntersection(const Vec v, double &min_t, int &minIdx, Hit &hitSphere) {
+  // if(isRightPixel) cout << "CHECK: " << hitSphere << endl;
   bool intersect = false, intersect2 = false; 
   if(sphereIntersection(v,min_t, minIdx)) {
     hitSphere = SPHERE;
     intersect = true;
   }
-  if(triangleIntersection(v, min_t, minIdx, hitSphere)) {
+  if(triangleIntersection(v, min_t, minIdx, hitSphere, 0)) {
     intersect2 = true;
   }
-  
+
   return intersect2 || intersect;
 }
 
 bool inShadow(Ray shadowRay, double furthestT) {
   double xc,yc,zc,r,b,c, min;
-  double eps = 1e-4;  
+  double eps = 1e-4, epsilon = 1e-4;  
 
   bool found = false;
   //in sphere intersection
@@ -397,16 +432,43 @@ bool inShadow(Ray shadowRay, double furthestT) {
       if(t1 > eps && temp2.mult(t1).magnitude() < furthestT) return true;
     } else continue;
   }
-  cout << "got to triangles";
-
+  
+  double t;
   for(int i = 0; i < num_triangles; i++) {
-    Triangle t = triangles[i];
-    Vec planeNormal = triangleNormal(t);
-    double ndotd = planeNormal.dot(shadowRay.direction);
-    if(ndotd > -eps && ndotd < eps) continue;
-    Vec temp(t.v[0].position[0], t.v[0].position[1], t.v[0].position[2]);
-    double d = planeNormal.dot(temp);
-    double t_value = (d-planeNormal.dot(shadowRay.origin))/ ndotd;
+
+    Vec n = triangleNormal(triangles[i]);
+       	double nd = n.dot(shadowRay.direction);
+
+       	// ray is parallel to the plane
+       	if (-epsilon < nd && nd < epsilon) continue;
+
+       	// Arbitrary point on the triangle in order to calculate d
+        // Vec p0 = get_vertex_position(triangle_idx, 0);
+        Triangle tr = triangles[i];
+        Vec p0(tr.v[0].position[0], tr.v[0].position[1], tr.v[0].position[2]);
+        double d = n.dot(p0);
+
+       	double t = (d - n.dot(shadowRay.origin)) / nd;
+
+       	// ray intersects a plane behind the scene
+       	if (t <= epsilon) continue;
+        // shadowRay.direction = shadowRay.direction.mult(t);
+
+    if(triangleIntersection2(shadowRay,i,t) && t > eps && t <furthestT) { 
+    if(isRightPixel)cout << "brett sucks" << endl;
+    return true; 
+    }
+
+    // Triangle t = triangles[i];
+    // Vec planeNormal = triangleNormal(t);
+    // double ndotd = planeNormal.dot(shadowRay.direction);
+    // //  cout << "barycentric2" << endl;
+
+    // if(ndotd > -eps && ndotd < eps) continue;
+    // Vec temp(t.v[0].position[0], t.v[0].position[1], t.v[0].position[2]);
+    // double d = planeNormal.dot(temp);
+    // double t_value = (d-planeNormal.dot(shadowRay.origin))/ ndotd;
+
 
 
     // double a,b,c, d, denom;
@@ -420,46 +482,43 @@ bool inShadow(Ray shadowRay, double furthestT) {
     // if(denom == 0) continue;
 
     // double t_value = -1 * ((a*shadowRay.origin.x)+(b*shadowRay.origin.y)+(c*shadowRay.origin.z)+d)/denom;
-    if(t_value <= eps) continue;
-    Vec temp1 = shadowRay.direction;
-    Vec temp2 = shadowRay.direction;
-    
-    //check if i have to multiply t
-    if(temp1.mult(t_value).magnitude() < furthestT) {
-      shadowRay.direction = shadowRay.direction.mult(t_value);
-      // cout << "barycentric1" << endl;
-      double alpha, beta, gamma;
-      barycentricCoord(shadowRay.direction.add(shadowRay.origin), t, alpha,beta,gamma);
-      if(alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) continue;
-      if(t_value > eps && temp1.mult(t_value).magnitude() < furthestT) return true;
-      // cout << "barycentric" << endl;
-    }
-    
+    // if(t_value <= eps) continue;
+   
+    // //check if i have to multiply t
+    //   shadowRay.direction = shadowRay.direction.mult(t_value);
+
+    // if(temp1.mult(t_value).magnitude() < furthestT) {
+    //   // double alpha, beta, gamma;
+    //   // barycentricCoord(shadowRay.direction.mult(t_value).add(shadowRay.origin), t, &alpha,&beta,&gamma);
+    //   // if(alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) continue;
+    //   if(t_value > eps && shadowRay.di.mult(t_value).magnitude() < furthestT) return true;
+    // }    
   }
   return false;
 
 }
 
-Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
+Vec phongLight(Vec primRay, const double minT, int minIdx, Hit hitSphere) {
 
   Vec intersectionP = primRay.mult(minT);
   Vec phong;
-  cout << minT << endl;
+  // cout << minT << endl;
   
   //hits something other than the background
-
+  Ray shadowRay;
   for(int i = 0; i < num_lights; i++) {
-    Ray shadowRay;
+    
     shadowRay.origin = primRay.mult(minT);
     Vec lightPoint;
     lightPoint.x = lights[i].position[0];
     lightPoint.y = lights[i].position[1];
     lightPoint.z = lights[i].position[2];
 
-    shadowRay.direction = lightPoint.minus(intersectionP).normalize();
-    double furthestPoint = lightPoint.minus(intersectionP).magnitude();
+    shadowRay.direction = lightPoint.minus(shadowRay.origin).normalize();
+    double furthestPoint = lightPoint.minus(shadowRay.origin).magnitude();
+    if(isRightPixel) cout << "Before shadow HERE: " << hitSphere << endl;
     if(!inShadow(shadowRay, furthestPoint)) {
-      // cout << "GOT HERE: " << hitSphere << endl;
+      if(isRightPixel) cout << "GOT HERE: " << hitSphere << endl;
       if(hitSphere == SPHERE) {
         double xc,yc,zc,r;
         Sphere sphere = spheres[minIdx];
@@ -518,9 +577,13 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
         phong = phong.add(color);
         
       } else if(hitSphere == TRIANGLE) {
+        // cout << "got here" <<endl;
         double alpha, beta, gamma;
         Triangle triangle = triangles[minIdx];
-        barycentricCoord(intersectionP, triangle, alpha, beta, gamma);
+        barycentricCoord(intersectionP, triangle, &alpha, &beta, &gamma);
+         if(isRightPixel) {
+        cout << "aplha " << alpha << " " << beta << " " << gamma<<endl;
+        }
         Vec triangleNorm = triangleNormal(triangle);
         Vec normal0(triangle.v[0].normal[0], triangle.v[0].normal[1], triangle.v[0].normal[2]);
         normal0 = normal0.mult(alpha);
@@ -544,7 +607,7 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
         diffuseColor.z = alpha*triangle.v[2].color_diffuse[2] + beta*triangle.v[2].color_diffuse[2] + gamma*triangle.v[2].color_diffuse[2];
         diffuseColor = diffuseColor.mult(LdotN);
 
-        double RdotV = reflect.dot(intersectionP.mult(-1.0));
+        double RdotV = reflect.dot(primRay.mult(-1.0));
         if(RdotV <= 1e-8) RdotV = 0.0; //clamp 
         if(RdotV > 1) RdotV = 1.0;
 
@@ -566,7 +629,7 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
 
         phong = phong.add(color);
       }
-    } else if(hitSphere == TRIANGLE && minIdx == 0) cout << "IN SHADOW BUT TRIANGLE" << endl;
+     } else if(isRightPixel) cout << "DID NOT GET HERE: " << hitSphere << endl;// else if(hitSphere == TRIANGLE && minIdx == 0) cout << "IN SHADOW BUT TRIANGLE" << endl;
   }
 
   return phong;
@@ -583,18 +646,9 @@ Vec directionRay(int x, int y) {
   direction.x = x_cord;
   direction.y = y_cord;
   direction.z = -1.0;
-
-  //  cout << "x: " << direction.x << endl;
-  //   cout << "y: " << direction.y << endl;
-  //   cout << "z: " << direction.z << endl;
-
   direction = direction.normalize();
-  //  cout << "x: " << direction.x << endl;
-  //   cout << "y: " << direction.y << endl;
-  //   cout << "z: " << direction.z << endl;
-  //   cout <<endl;
-  return direction;
 
+  return direction;
 }
 
 //MODIFY THIS FUNCTION
@@ -615,8 +669,14 @@ void draw_scene()
       double r,g,b;
       Vec ray = directionRay(x,y);
       Hit hitSphere = NONE;
-      
+      if(x == 202 && y == 318) isRightPixel = true;
+      else isRightPixel = false;
+      if(isRightPixel) cout << "SHOULD: " << hitSphere << endl;
+      const Vec temp(ray.x,ray.y,ray.z);
       if(checkIntersection(ray, minT, minIdx, hitSphere)) {
+        // if(temp.x != ray.x || temp.y != ray.y || temp.z !=ray.z) {
+        if(isRightPixel) cout << "WHAT IS CHANGING " << minT << endl;
+        // }
         Vec color = phongLight(ray, minT, minIdx, hitSphere);
         color.x +=ambient_light[0];
         color.y +=ambient_light[1];
@@ -627,16 +687,18 @@ void draw_scene()
         g = color.y;
         b = color.z;
         if(minIdx == 0 && hitSphere == TRIANGLE) {
-         cout << "RAY color: " << r<<endl;
-          cout << "RAY color: " << g<<endl;
-          cout << "RAY color: " << b<<endl;
-          cout << "ambient color: " << ambient_light[0]<<endl;
-        }
-        // cout << "RAY color: " << r<<endl;
+          // cout << x << " " << y << endl;
+        //  cout << "RAY color: " << r<<endl;
         //   cout << "RAY color: " << g<<endl;
         //   cout << "RAY color: " << b<<endl;
+        //   cout << "ambient color: " << ambient_light[0]<<endl;
+        }
+        
       }
-      else  {r = 255; g= 255; b =255;}
+      else  {if(isRightPixel) {
+        cout << "RAY color: " << r<<endl;
+          cout << "RAY color: " << g<<endl;
+          cout << "RAY color: " << b<<endl;}r = 255; g= 255; b =255;}
       plot_pixel(x, y, r,g,b);
     }
     glEnd();
