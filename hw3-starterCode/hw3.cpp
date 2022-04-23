@@ -1,3 +1,4 @@
+
 /* **************************
  * CSCI 420
  * Assignment 3 Raytracer
@@ -21,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <iostream>
+#include <thread>
 #ifdef WIN32
   #define strcasecmp _stricmp
 #endif
@@ -47,6 +49,8 @@ int mode = MODE_DISPLAY;
 #define fov 60.0
 
 #define MAXT 1e30
+
+bool isRightPixel = false;
 
 unsigned char buffer[HEIGHT][WIDTH][3];
 double aspectRatio, tanConst;
@@ -270,7 +274,6 @@ void barycentricCoord(const Vec p, Triangle t, double &alpha, double &beta, doub
   gamma = areaC0C1C / areaAllV;
 }
 
-
 bool sphereIntersection(Vec v, double& minT, int& minIdx) {
   double xc,yc,zc,r,b,c, min;
 
@@ -318,37 +321,39 @@ bool sphereIntersection(Vec v, double& minT, int& minIdx) {
 
 }
 
-bool triangleIntersection(Vec v, double &min_t, int &minIdx, Hit &hitSphere) {
+bool triangleIntersection(Vec direction, double &min_tv, int &minIdx, Hit &hitSphere) {
   bool found = false;
+  double t_value;
+  double alpha, beta, gamma;
+  double epsilon = 1e-8;
   // cout << "MIN: " << min_t << endl;
-  for(int i = 0; i < num_triangles; i++) {
+  for (int i = 0; i < num_triangles; i++) {
     Triangle t = triangles[i];
     Vec planeNormal = triangleNormal(t);
-    double a,b,c, d, denom;
+    double a, b, c, d, denom;
     a = planeNormal.x;
     b = planeNormal.y;
     c = planeNormal.z;
 
-    d = -1.0 * (a*t.v[0].position[0]+b*t.v[0].position[1]+c*t.v[0].position[2]);
-    denom = ((a*v.x) +(b*v.y)+(c*v.z));
+    double planeNdotD = planeNormal.dot(direction);
 
-    if(denom == 0) continue;
+    if (planeNdotD < epsilon || epsilon < planeNdotD) {
+      Vec p0;
+      p0.x = triangles[i].v[0].position[0];
+      p0.y = triangles[i].v[0].position[1];
+      p0.z = triangles[i].v[0].position[2];
 
-    double t_value = -1 * (a+b+c+d)/denom;
-    if(t_value <= 1e-8) continue;
-    
-    //check if i have to multiply t
-    if(t_value < min_t) {
-      v = v.mult(t_value);
-      double alpha, beta, gamma;
-      barycentricCoord(v, t, alpha,beta,gamma);
-      if(alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) continue;
-      found = true;
-      min_t = t_value;
-      minIdx = i;
-      hitSphere = TRIANGLE;
+      t_value = planeNormal.dot(p0) / planeNdotD;
+      if (t_value > 0 && t_value < min_tv)      {
+        barycentricCoord(direction.mult(t_value), triangles[i], alpha, beta, gamma);
+        if (alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1 && gamma >= 0 && gamma <= 1) {
+          min_tv = t_value;
+          minIdx = i;
+          hitSphere = TRIANGLE;
+          found = true;
+        }
+      }
     }
-    
   }
   return found;
 }
@@ -397,44 +402,29 @@ bool inShadow(Ray shadowRay, double furthestT) {
       if(t1 > eps && temp2.mult(t1).magnitude() < furthestT) return true;
     } else continue;
   }
-  cout << "got to triangles";
+  // cout << "got to triangles";
 
   for(int i = 0; i < num_triangles; i++) {
+    if(isRightPixel)cout << "HELP" << endl;
     Triangle t = triangles[i];
     Vec planeNormal = triangleNormal(t);
-    double ndotd = planeNormal.dot(shadowRay.direction);
-    if(ndotd > -eps && ndotd < eps) continue;
-    Vec temp(t.v[0].position[0], t.v[0].position[1], t.v[0].position[2]);
-    double d = planeNormal.dot(temp);
-    double t_value = (d-planeNormal.dot(shadowRay.origin))/ ndotd;
+    double a,b,c, d, denom;
+    a = planeNormal.x;
+    b = planeNormal.y;
+    c = planeNormal.z;
 
+    d = -1.0 * (a*t.v[0].position[0]+b*t.v[0].position[1]+c*t.v[0].position[2]);
+    denom = ((a*shadowRay.direction.x) +(b*shadowRay.direction.y)+(c*shadowRay.direction.z));
 
-    // double a,b,c, d, denom;
-    // a = planeNormal.x;
-    // b = planeNormal.y;
-    // c = planeNormal.z;
+    if(denom == 0) continue;
 
-    // d = -1.0 * (a*t.v[0].position[0]+b*t.v[0].position[1]+c*t.v[0].position[2]);
-    // denom = ((a*shadowRay.direction.x) +(b*shadowRay.direction.y)+(c*shadowRay.direction.z));
-
-    // if(denom == 0) continue;
-
-    // double t_value = -1 * ((a*shadowRay.origin.x)+(b*shadowRay.origin.y)+(c*shadowRay.origin.z)+d)/denom;
+    double t_value = -1 * ((a*shadowRay.origin.x)+(b*shadowRay.origin.y)+(c*shadowRay.origin.z)+d)/denom;
     if(t_value <= eps) continue;
-    Vec temp1 = shadowRay.direction;
-    Vec temp2 = shadowRay.direction;
-    
-    //check if i have to multiply t
-    if(temp1.mult(t_value).magnitude() < furthestT) {
-      shadowRay.direction = shadowRay.direction.mult(t_value);
-      // cout << "barycentric1" << endl;
       double alpha, beta, gamma;
-      barycentricCoord(shadowRay.direction.add(shadowRay.origin), t, alpha,beta,gamma);
+      barycentricCoord(shadowRay.direction.mult(t_value).add(shadowRay.origin), t, alpha,beta,gamma);
       if(alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) continue;
-      if(t_value > eps && temp1.mult(t_value).magnitude() < furthestT) return true;
-      // cout << "barycentric" << endl;
-    }
-    
+      if(isRightPixel) cout << "HEfdsfsfLP" << endl;
+      if(t_value > eps && shadowRay.direction.mult(t_value).magnitude() < furthestT) return true;
   }
   return false;
 
@@ -444,10 +434,9 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
 
   Vec intersectionP = primRay.mult(minT);
   Vec phong;
-  cout << minT << endl;
   
   //hits something other than the background
-
+  if(minT == MAXT) return Vec(0,0,0);
   for(int i = 0; i < num_lights; i++) {
     Ray shadowRay;
     shadowRay.origin = primRay.mult(minT);
@@ -458,8 +447,9 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
 
     shadowRay.direction = lightPoint.minus(intersectionP).normalize();
     double furthestPoint = lightPoint.minus(intersectionP).magnitude();
-    if(!inShadow(shadowRay, furthestPoint)) {
-      // cout << "GOT HERE: " << hitSphere << endl;
+    if(isRightPixel) cout << "GOT HERE: " << hitSphere << endl;
+    if(!inShadow(shadowRay,furthestPoint)) {
+      if(isRightPixel) cout << "GOT HERE: " << hitSphere << endl;
       if(hitSphere == SPHERE) {
         double xc,yc,zc,r;
         Sphere sphere = spheres[minIdx];
@@ -530,28 +520,28 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
         normal2 = normal2.mult(gamma);
 
         //do i normalize
-        Vec normal = normal1.add(normal0).add(normal2).normalize();
+        Vec normal = normal0.add(normal1).add(normal2).normalize();
         Vec L = lightPoint.minus(intersectionP).normalize();
-        Vec reflect = (normal.mult(2*L.dot(normal)).minus(L)).normalize();
+        Vec reflect = ((normal.mult(2*L.dot(normal))).minus(L)).normalize();
 
         double LdotN = L.dot(normal);
         if(LdotN <= 1e-8) LdotN = 0;
-        if(LdotN > 1) LdotN = 1.0;
+        // if(LdotN > 1) LdotN = 1.0;
 
         Vec diffuseColor;
-        diffuseColor.x = alpha*triangle.v[0].color_diffuse[0] + beta*triangle.v[0].color_diffuse[0] + gamma*triangle.v[0].color_diffuse[0];
-        diffuseColor.y = alpha*triangle.v[1].color_diffuse[1] + beta*triangle.v[1].color_diffuse[1] + gamma*triangle.v[1].color_diffuse[1];
-        diffuseColor.z = alpha*triangle.v[2].color_diffuse[2] + beta*triangle.v[2].color_diffuse[2] + gamma*triangle.v[2].color_diffuse[2];
+        diffuseColor.x = alpha*triangle.v[0].color_diffuse[0] + beta*triangle.v[1].color_diffuse[0] + gamma*triangle.v[2].color_diffuse[0];
+        diffuseColor.y = alpha*triangle.v[0].color_diffuse[1] + beta*triangle.v[1].color_diffuse[1] + gamma*triangle.v[2].color_diffuse[1];
+        diffuseColor.z = alpha*triangle.v[0].color_diffuse[2] + beta*triangle.v[1].color_diffuse[2] + gamma*triangle.v[2].color_diffuse[2];
         diffuseColor = diffuseColor.mult(LdotN);
 
-        double RdotV = reflect.dot(intersectionP.mult(-1.0));
+        double RdotV = reflect.dot(primRay.mult(-1.0));
         if(RdotV <= 1e-8) RdotV = 0.0; //clamp 
-        if(RdotV > 1) RdotV = 1.0;
+        // if(RdotV > 1) RdotV = 1.0;
 
         Vec specColor;
-        specColor.x = alpha*triangle.v[0].color_specular[0] + beta*triangle.v[0].color_specular[0] + gamma*triangle.v[0].color_specular[0];
-        specColor.y = alpha*triangle.v[1].color_specular[1] + beta*triangle.v[1].color_specular[1] + gamma*triangle.v[1].color_specular[1];
-        specColor.z = alpha*triangle.v[2].color_specular[2] + beta*triangle.v[2].color_specular[2] + gamma*triangle.v[2].color_specular[2];
+        specColor.x = alpha*triangle.v[0].color_specular[0] + beta*triangle.v[1].color_specular[0] + gamma*triangle.v[2].color_specular[0];
+        specColor.y = alpha*triangle.v[0].color_specular[1] + beta*triangle.v[1].color_specular[1] + gamma*triangle.v[2].color_specular[1];
+        specColor.z = alpha*triangle.v[0].color_specular[2] + beta*triangle.v[1].color_specular[2] + gamma*triangle.v[2].color_specular[2];
         specColor = specColor.mult(pow(RdotV, alpha*triangle.v[0].shininess + beta*triangle.v[1].shininess + gamma*triangle.v[2].shininess));
 
         Vec color;
@@ -566,7 +556,7 @@ Vec phongLight(Vec primRay, double minT, int minIdx, Hit hitSphere) {
 
         phong = phong.add(color);
       }
-    } else if(hitSphere == TRIANGLE && minIdx == 0) cout << "IN SHADOW BUT TRIANGLE" << endl;
+    } else if(isRightPixel) cout << "IN SHADOW BUT TRIANGLE" << endl;
   }
 
   return phong;
@@ -597,9 +587,40 @@ Vec directionRay(int x, int y) {
 
 }
 
+int randNum(int min, int max) {
+  int x = rand()%min +max;
+  return x;
+}
+
 //MODIFY THIS FUNCTION
 void draw_scene()
 {
+  srand(time(NULL));
+  int extraLights = 3;
+  int lastLight = num_lights;
+  double del = 0.04;
+
+  for(int i = 0; i < num_lights; i++) {
+    for(int j = 0; j < extraLights; j++) {
+        double r1 = randNum(1,4);
+        double r2 = randNum(1,10);
+        if(r2 <=5) r1 *= -1;
+        lastLight++;
+        lights[lastLight].position[0] = lights[i].position[0] + r1 * del;
+        lights[lastLight].position[1] = lights[i].position[1] + r1 * del;
+        lights[lastLight].position[2] = lights[i].position[2] + r1 * del;
+
+        lights[lastLight].color[0] = lights[i].color[0] / (double)extraLights;
+        lights[lastLight].color[1] = lights[i].color[1] / (double)extraLights;
+        lights[lastLight].color[2] = lights[i].color[2] / (double)extraLights;
+
+    }
+    lights[i].color[0] = lights[i].color[0] / (double)extraLights;
+    lights[i].color[1] = lights[i].color[1] / (double)extraLights;
+    lights[i].color[2] = lights[i].color[2] / (double)extraLights;
+  }
+  num_lights = lastLight;
+  // addLights();
   aspectRatio = (double)WIDTH/(double)HEIGHT;
   tanConst = tan(fov/2.0 *3.14159265/180);
   
@@ -610,33 +631,54 @@ void draw_scene()
     glBegin(GL_POINTS);
     for(unsigned int y=0; y<HEIGHT; y++)
     {
-      double minT = MAXT;
-      int minIdx = -1;
-      double r,g,b;
       Vec ray = directionRay(x,y);
-      Hit hitSphere = NONE;
-      
-      if(checkIntersection(ray, minT, minIdx, hitSphere)) {
-        Vec color = phongLight(ray, minT, minIdx, hitSphere);
-        color.x +=ambient_light[0];
-        color.y +=ambient_light[1];
-        color.z +=ambient_light[2];
-        color = color.clamp();
-        color = color.mult(255);
-        r = color.x;
-        g = color.y;
-        b = color.z;
-        if(minIdx == 0 && hitSphere == TRIANGLE) {
-         cout << "RAY color: " << r<<endl;
-          cout << "RAY color: " << g<<endl;
-          cout << "RAY color: " << b<<endl;
-          cout << "ambient color: " << ambient_light[0]<<endl;
+      Vec rays[4];
+      rays[0] = ray;
+      rays[0].x -= (2*aspectRatio*tanConst/(double)WIDTH)/4.0;
+      rays[1] = ray;
+      rays[1].x += (2*aspectRatio*tanConst/(double)WIDTH)/4.0;
+      rays[2] = ray;
+      rays[2].y -= (2*tanConst/(double)HEIGHT)/4.0;
+      rays[3] = ray;
+      rays[3].y += (2*tanConst/(double)HEIGHT)/4.0;
+      double r=0,g=0,b=0;
+      for(unsigned int i=0; i <4; i++) {
+        double minT = MAXT;
+        int minIdx = -1;
+        
+        
+        Hit hitSphere = NONE;
+        if(x == 280 && y == 248 ) isRightPixel = true;
+        else isRightPixel = false;
+
+        // thread t(get_color, ray, minT, minIdx, hitSphere);
+        
+        if(checkIntersection(rays[i], minT, minIdx, hitSphere)) {
+          Vec color = phongLight(rays[i], minT, minIdx, hitSphere);
+          // color.x +=ambient_light[0];
+          // color.y +=ambient_light[1];
+          // color.z +=ambient_light[2];
+          // color = color.clamp();
+          // color = color.mult(255);
+          r += color.x;
+          g += color.y;
+          b += color.z;
         }
-        // cout << "RAY color: " << r<<endl;
-        //   cout << "RAY color: " << g<<endl;
-        //   cout << "RAY color: " << b<<endl;
+        else  {r += 1; g+= 1; b +=1;}
       }
-      else  {r = 255; g= 255; b =255;}
+      r /= 4;
+          g /= 4;
+          b /= 4;
+       r +=ambient_light[0];
+          g +=ambient_light[1];
+          b +=ambient_light[2];
+          Vec vp(r,g,b);
+          vp = vp.clamp();
+          vp = vp.mult(255);
+          r = vp.x;g=vp.y;b=vp.z;
+          // color = color.clamp();
+          // color = color.mult(255);
+
       plot_pixel(x, y, r,g,b);
     }
     glEnd();
